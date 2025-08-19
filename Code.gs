@@ -672,10 +672,9 @@ function parseCustomerName(text) {
   return name || null;
 }
 
-// 予約メール本文から「■ご利用クーポン」の内容を抽出（料金と詳細文も含む）
+// 予約メール本文から「■ご利用クーポン」の内容を抽出（クーポン名と料金のみ）
 function parseCouponInfo(text) {
   const lines = text.split(/\r?\n/);
-  let couponLines = [];
   let foundCoupon = false;
 
   for (let i = 0; i < lines.length; i++) {
@@ -684,7 +683,7 @@ function parseCouponInfo(text) {
       // 同じ行にクーポン情報がある場合
       const inline = lines[i].replace(/^.*?[:：]\s*/, "").trim();
       if (inline && inline !== "■ご利用クーポン") {
-        couponLines.push(inline);
+        return extractCouponNameAndPrice(inline);
       }
       continue;
     }
@@ -695,31 +694,34 @@ function parseCouponInfo(text) {
       if (/^■/.test(line)) {
         break;
       }
-      // 空行でない場合は追加
+      // 最初の非空行のみを処理（クーポン名と料金が含まれる行）
       if (line) {
-        couponLines.push(line);
+        return extractCouponNameAndPrice(line);
       }
     }
   }
 
-  if (couponLines.length === 0) return null;
+  return null;
+}
 
-  // 全ての行を結合
-  let couponInfo = couponLines.join(" ").trim();
-
-  // カレンダータイトルが長すぎる場合は短縮（Googleカレンダーの制限を考慮）
-  if (couponInfo.length > 150) {
-    // 最初の重要な部分（★で囲まれた部分と価格）を優先
-    const starMatch = couponInfo.match(/★([^★]+)★([^¥]*¥[^¥]*¥[^\s]+)/);
-    if (starMatch) {
-      couponInfo = `${starMatch[1]}${starMatch[2]}`.trim();
-    } else {
-      // それでも長い場合は最初の150文字で切る
-      couponInfo = couponInfo.substring(0, 150) + "...";
-    }
+// クーポン名と料金部分のみを抽出するヘルパー関数
+function extractCouponNameAndPrice(line) {
+  // ★で囲まれたクーポン名と料金部分を抽出
+  // 例: ★人気No.2★パーソナルカラー診断+顔診断+骨格診断　¥29800→¥17000
+  const match = line.match(/★([^★]+)★([^¥]*¥[^¥]*¥[^\s\u3000]+)/);
+  if (match) {
+    return `★${match[1]}★${match[2]}`.trim();
   }
 
-  return couponInfo;
+  // ★がない場合は、料金部分（¥記号を含む）までを抽出
+  const priceMatch = line.match(/^([^¥]*¥[^¥]*¥[^\s\u3000]+)/);
+  if (priceMatch) {
+    return priceMatch[1].trim();
+  }
+
+  // 料金が見つからない場合は、最初の文や単語のみを返す
+  const firstPart = line.split(/[\u3000\s]{2,}/)[0]; // 2つ以上の空白で区切る
+  return firstPart ? firstPart.trim() : line.trim();
 }
 
 // ラベル行の直後の非空行を取り出す（値が同一行にある場合も考慮）
