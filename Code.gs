@@ -81,16 +81,17 @@ function pollEmails() {
           ? `${name}さま - ${couponInfo}`
           : `${name}さま予約`;
 
-        scheduleReminder(schedule, {
-          eventId,
-          calendarId: getCalendarId(),
-          title: titleForReminder,
-          start: schedule.start.toISOString(),
-          threadPermalink: meta.permalink,
-          metaId: `${meta.threadId}:${
-            meta.messageId
-          }:${schedule.start.getTime()}`,
-        });
+        // 前日LINEリマインド機能は無効化されています
+        // scheduleReminder(schedule, {
+        //   eventId,
+        //   calendarId: getCalendarId(),
+        //   title: titleForReminder,
+        //   start: schedule.start.toISOString(),
+        //   threadPermalink: meta.permalink,
+        //   metaId: `${meta.threadId}:${
+        //     meta.messageId
+        //   }:${schedule.start.getTime()}`,
+        // });
       } else {
         // 抽出失敗でも最低限の通知（運用に応じてオフ可）
         notifyLineFallback(meta);
@@ -370,27 +371,32 @@ function notifyLineFallback(meta) {
 }
 
 function scheduleReminder(schedule, ctx) {
-  // トリガ数制限対策: 既存のsendReminderトリガを削除
-  cleanupOldReminderTriggers();
+  // 前日LINEリマインド機能は無効化されています
+  // この関数は現在使用されていませんが、後で有効化する可能性に備えて残しています
+  console.log("scheduleReminder called but reminder feature is disabled");
+  return;
 
-  const remindAt = new Date(schedule.start.getTime() - 24 * 60 * 60 * 1000);
-  const now = new Date();
-  const fireAt =
-    remindAt.getTime() > now.getTime() + 60 * 1000
-      ? remindAt
-      : new Date(now.getTime() + 2 * 60 * 1000);
+  // // トリガ数制限対策: 既存のsendReminderトリガを削除
+  // cleanupOldReminderTriggers();
 
-  const trigger = ScriptApp.newTrigger("sendReminder")
-    .timeBased()
-    .at(fireAt)
-    .create();
+  // const remindAt = new Date(schedule.start.getTime() - 24 * 60 * 60 * 1000);
+  // const now = new Date();
+  // const fireAt =
+  //   remindAt.getTime() > now.getTime() + 60 * 1000
+  //     ? remindAt
+  //     : new Date(now.getTime() + 2 * 60 * 1000);
 
-  // triggerUid をキーにコンテキストを保存
-  const uid =
-    typeof trigger.getUniqueId === "function" ? trigger.getUniqueId() : "";
-  const storeKey = buildTriggerStoreKey(uid);
-  const props = PropertiesService.getScriptProperties();
-  props.setProperty(storeKey, JSON.stringify(ctx));
+  // const trigger = ScriptApp.newTrigger("sendReminder")
+  //   .timeBased()
+  //   .at(fireAt)
+  //   .create();
+
+  // // triggerUid をキーにコンテキストを保存
+  // const uid =
+  //   typeof trigger.getUniqueId === "function" ? trigger.getUniqueId() : "";
+  // const storeKey = buildTriggerStoreKey(uid);
+  // const props = PropertiesService.getScriptProperties();
+  // props.setProperty(storeKey, JSON.stringify(ctx));
 }
 
 function sendReminder(e) {
@@ -548,29 +554,30 @@ function setupInitial() {
   console.log("Labels ensured.");
 }
 
-// トリガクリーンアップ: 過去のsendReminderトリガを削除
+// トリガクリーンアップ: すべてのsendReminderトリガを削除（前日リマインド機能無効化のため）
 function cleanupOldReminderTriggers() {
   const triggers = ScriptApp.getProjectTriggers();
-  const now = new Date().getTime();
   let deletedCount = 0;
 
   for (const trigger of triggers) {
     if (trigger.getHandlerFunction() === "sendReminder") {
-      // 過去のトリガ（既に実行時刻を過ぎた）または古い（7日以上前に作成）トリガを削除
-      const triggerTime =
-        trigger.getTriggerSource() === ScriptApp.TriggerSource.CLOCK
-          ? new Date(trigger.getTriggerSourceId()).getTime()
-          : 0;
-      if (triggerTime < now || now - triggerTime > 7 * 24 * 60 * 60 * 1000) {
-        ScriptApp.deleteTrigger(trigger);
-        deletedCount++;
-      }
+      // 前日リマインド機能が無効化されたため、すべてのリマインダートリガーを削除
+      ScriptApp.deleteTrigger(trigger);
+      deletedCount++;
     }
   }
 
   if (deletedCount > 0) {
-    console.log(`Cleaned up ${deletedCount} old reminder triggers`);
+    console.log(
+      `Deleted ${deletedCount} reminder triggers (reminder feature disabled)`
+    );
   }
+}
+
+// 前日リマインダートリガーのみを削除（前日リマインド機能無効化用）
+function deleteReminderTriggers() {
+  cleanupOldReminderTriggers();
+  console.log("All reminder triggers have been deleted");
 }
 
 // 手動でトリガを全削除（緊急時用）
