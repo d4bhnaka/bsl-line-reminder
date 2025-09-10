@@ -1,9 +1,13 @@
 /**
- * Apps Script (JavaScript) — Gmail→LINE通知＋日程抽出→Calendar登録＋前日LINEリマインド
+ * Apps Script (JavaScript) — Gmail→複数LINE公式アカウント通知＋日程抽出→Calendar登録
  *
  * 事前準備:
  * - スクリプト プロパティ（File > Project properties > Script properties）に以下を設定
- *   - LINE_CHANNEL_ACCESS_TOKEN: Messaging API チャネルアクセストークン（長期）
+ *   - LINE_CHANNEL_ACCESS_TOKEN_1: 1つ目のLINE公式アカウントのチャンネルアクセストークン
+ *   - LINE_CHANNEL_ACCESS_TOKEN_2: 2つ目のLINE公式アカウントのチャンネルアクセストークン
+ *   - LINE_CHANNEL_ACCESS_TOKEN_3: 3つ目のLINE公式アカウントのチャンネルアクセストークン（任意）
+ *   - （必要に応じて LINE_CHANNEL_ACCESS_TOKEN_4, 5... を追加）
+ *   - LINE_ACCOUNT_NAMES: 各アカウントの名前（カンマ区切り、例: "店舗A,店舗B,店舗C"）
  *   - TARGET_EMAIL: 監視対象の自アドレス（例: me@example.com）
  *   - CALENDAR_ID: 予定登録先カレンダーID（未設定ならデフォルト）
  *   - TIMEZONE: Asia/Tokyo （未設定でもAsia/Tokyoを既定）
@@ -17,8 +21,8 @@ const LABELS = Object.freeze({
 });
 
 const PROP_KEYS = Object.freeze({
-  channelAccessToken: "LINE_CHANNEL_ACCESS_TOKEN",
-  channelSecret: "LINE_CHANNEL_SECRET",
+  channelAccessTokenPrefix: "LINE_CHANNEL_ACCESS_TOKEN_", // _1, _2, _3... という形式で複数トークンを管理
+  accountNames: "LINE_ACCOUNT_NAMES", // アカウント名のリスト（カンマ区切り）
   targetEmail: "TARGET_EMAIL",
   calendarId: "CALENDAR_ID",
   timezone: "TIMEZONE",
@@ -29,6 +33,7 @@ const CONFIG_DEFAULTS = Object.freeze({
   targetEmail: "besol4b.shop@gmail.com",
   calendarId: "besol4b.shop@gmail.com",
   timezone: "Asia/Tokyo",
+  maxLineAccounts: 10, // 最大10個のLINEアカウントまでサポート
 });
 
 function pollEmails() {
@@ -356,75 +361,145 @@ function notifyLineNow(meta, schedule, customerName) {
     `本文抜粋: ${meta.snippet}`,
     `Gmail: ${meta.permalink}`,
   ].join("\n");
-  pushLineMessage({ type: "text", text });
+  pushLineMessageToAll({ type: "text", text });
 }
 
 function notifyLineFallback(meta) {
-  const text = [
+  // 本文抜粋を整形（最大200文字に制限）
+  let snippetText = "";
+  if (meta.snippet && meta.snippet.trim()) {
+    const trimmedSnippet = meta.snippet.trim();
+    if (trimmedSnippet.length > 200) {
+      snippetText = `本文抜粋: ${trimmedSnippet.substring(0, 200)}...`;
+    } else {
+      snippetText = `本文抜粋: ${trimmedSnippet}`;
+    }
+  }
+
+  const textParts = [
     "【新着メール】日程抽出に失敗しました",
     `件名: ${meta.subject}`,
     `差出人: ${meta.from}`,
-    `本文抜粋: ${meta.snippet}`,
-    `Gmail: ${meta.permalink}`,
-  ].join("\n");
-  pushLineMessage({ type: "text", text });
+  ];
+
+  // 本文抜粋がある場合のみ追加
+  if (snippetText) {
+    textParts.push(snippetText);
+  }
+
+  textParts.push(`Gmail: ${meta.permalink}`);
+
+  const text = textParts.join("\n");
+  pushLineMessageToAll({ type: "text", text });
 }
 
-function scheduleReminder(schedule, ctx) {
-  // 前日LINEリマインド機能は無効化されています
-  // この関数は現在使用されていませんが、後で有効化する可能性に備えて残しています
-  console.log("scheduleReminder called but reminder feature is disabled");
-  return;
+/**
+ * 複数のLINE公式アカウントに同じメッセージを送信
+ * @param {Object} message - LINE Messaging APIのメッセージオブジェクト
+ */
+function pushLineMessageToAll(message) {
+  const lineAccounts = getLineAccounts();
 
-  // // トリガ数制限対策: 既存のsendReminderトリガを削除
-  // cleanupOldReminderTriggers();
+  if (lineAccounts.length === 0) {
+    throw new Error("No LINE channel access tokens configured");
+  }
 
-  // const remindAt = new Date(schedule.start.getTime() - 24 * 60 * 60 * 1000);
-  // const now = new Date();
-  // const fireAt =
-  //   remindAt.getTime() > now.getTime() + 60 * 1000
-  //     ? remindAt
-  //     : new Date(now.getTime() + 2 * 60 * 1000);
+  const results = [];
+  const errors = [];
 
-  // const trigger = ScriptApp.newTrigger("sendReminder")
-  //   .timeBased()
-  //   .at(fireAt)
-  //   .create();
+  // 各アカウントに並行して送信
+  for (const account of lineAccounts) {
+    try {
+      pushLineMessage(message, account.token, account.name);
+      results.push({
+        name: account.name,
+        status: "success",
+      });
+    } catch (err) {
+      console.error(`Failed to send to ${account.name}:`, err);
+      errors.push({
+        name: account.name,
+        error: err.toString(),
+      });
+    }
+  }
 
-  // // triggerUid をキーにコンテキストを保存
-  // const uid =
-  //   typeof trigger.getUniqueId === "function" ? trigger.getUniqueId() : "";
-  // const storeKey = buildTriggerStoreKey(uid);
-  // const props = PropertiesService.getScriptProperties();
-  // props.setProperty(storeKey, JSON.stringify(ctx));
+  // 送信結果をログに記録
+  console.log("LINE送信結果:", {
+    total: lineAccounts.length,
+    success: results.length,
+    failed: errors.length,
+    details: { results, errors },
+  });
+
+  // すべて失敗した場合はエラーをスロー
+  if (results.length === 0 && errors.length > 0) {
+    throw new Error(`All LINE messages failed: ${JSON.stringify(errors)}`);
+  }
 }
 
-function sendReminder(e) {
-  try {
-    const uid = (e && e.triggerUid) || "";
-    if (!uid) return;
+/**
+ * 設定されているLINEアカウント情報を取得
+ * @returns {Array<{token: string, name: string}>} アカウント情報の配列
+ */
+function getLineAccounts() {
+  const props = PropertiesService.getScriptProperties();
+  const accounts = [];
 
-    const storeKey = buildTriggerStoreKey(uid);
-    const props = PropertiesService.getScriptProperties();
-    const raw = props.getProperty(storeKey);
-    if (!raw) return;
+  // アカウント名のリストを取得（カンマ区切り）
+  const accountNames = (props.getProperty(PROP_KEYS.accountNames) || "").split(
+    ","
+  );
 
-    const ctx = JSON.parse(raw);
-    const title = ctx.title;
-    const start = new Date(ctx.start);
+  // 最大10個のアカウントをチェック
+  for (let i = 1; i <= CONFIG_DEFAULTS.maxLineAccounts; i++) {
+    const tokenKey = `${PROP_KEYS.channelAccessTokenPrefix}${i}`;
+    const token = props.getProperty(tokenKey);
 
-    const text = [
-      "【前日リマインド】",
-      `タイトル: ${title}`,
-      `開始: ${formatJst(start)}`,
-      `Gmail: ${ctx.threadPermalink}`,
-    ].join("\n");
-    pushLineMessage({ type: "text", text });
+    if (token) {
+      const name = accountNames[i - 1]
+        ? accountNames[i - 1].trim()
+        : `Account ${i}`;
+      accounts.push({ token, name });
+    }
+  }
 
-    // 使い終わったら削除
-    props.deleteProperty(storeKey);
-  } catch (err) {
-    console.error(err);
+  return accounts;
+}
+
+/**
+ * 単一のLINE公式アカウントにメッセージを送信
+ * @param {Object} message - LINE Messaging APIのメッセージオブジェクト
+ * @param {string} token - チャンネルアクセストークン
+ * @param {string} accountName - アカウント名（ログ用）
+ */
+function pushLineMessage(message, token, accountName = "Unknown") {
+  if (!token)
+    throw new Error(`Channel access token is not set for ${accountName}`);
+
+  const url = "https://api.line.me/v2/bot/message/broadcast";
+  const payload = { messages: [message] };
+  const options = {
+    method: "post",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+    followRedirects: true,
+    validateHttpsCertificates: true,
+  };
+
+  const res = fetchWithRetry(url, options, 3);
+  const code = res.getResponseCode();
+
+  if (code >= 300) {
+    const errorMsg = `LINE Messaging API broadcast failed for ${accountName}`;
+    console.error(errorMsg, code, res.getContentText());
+    throw new Error(`${errorMsg}: ${code}`);
+  } else {
+    console.log(`Successfully sent to ${accountName}`);
   }
 }
 
@@ -498,35 +573,6 @@ function getOrCreateLabel(name) {
   return GmailApp.getUserLabelByName(name) || GmailApp.createLabel(name);
 }
 
-// Messaging API: broadcastメッセージ送信
-function pushLineMessage(message) {
-  const props = PropertiesService.getScriptProperties();
-  const token = props.getProperty(PROP_KEYS.channelAccessToken);
-  if (!token) throw new Error("LINE_CHANNEL_ACCESS_TOKEN is not set");
-  const url = "https://api.line.me/v2/bot/message/broadcast";
-  const payload = { messages: [message] };
-  const options = {
-    method: "post",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true,
-    followRedirects: true,
-    validateHttpsCertificates: true,
-  };
-  const res = fetchWithRetry(url, options, 3);
-  const code = res.getResponseCode();
-  if (code >= 300) {
-    console.error(
-      "LINE Messaging API broadcast failed",
-      code,
-      res.getContentText()
-    );
-  }
-}
-
 function fetchWithRetry(url, options, maxRetries) {
   let lastError = null;
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
@@ -552,6 +598,13 @@ function setupInitial() {
   getOrCreateLabel(LABELS.target);
   getOrCreateLabel(LABELS.processed);
   console.log("Labels ensured.");
+
+  // LINE アカウント設定を確認
+  const accounts = getLineAccounts();
+  console.log(`Found ${accounts.length} LINE account(s):`);
+  accounts.forEach((acc, idx) => {
+    console.log(`  ${idx + 1}. ${acc.name}`);
+  });
 }
 
 // トリガクリーンアップ: すべてのsendReminderトリガを削除（前日リマインド機能無効化のため）
@@ -649,24 +702,62 @@ function pingExternal() {
   console.log(res.getResponseCode(), res.getContentText().slice(0, 200));
 }
 
-// LINE Notify ステータスAPIで到達性を確認
-function pingLineMessagingApi() {
-  const props = PropertiesService.getScriptProperties();
-  const token = props.getProperty(PROP_KEYS.channelAccessToken);
-  if (!token) throw new Error("LINE_CHANNEL_ACCESS_TOKEN is not set");
-  const res = UrlFetchApp.fetch("https://api.line.me/v2/bot/info", {
-    method: "get",
-    headers: { Authorization: `Bearer ${token}` },
-    muteHttpExceptions: true,
-    followRedirects: true,
-    validateHttpsCertificates: true,
-  });
-  console.log(res.getResponseCode(), res.getContentText());
+// 複数のLINE Messaging APIの接続状態を確認
+function pingAllLineMessagingApis() {
+  const accounts = getLineAccounts();
+
+  if (accounts.length === 0) {
+    console.log("No LINE accounts configured");
+    return;
+  }
+
+  console.log(`Testing ${accounts.length} LINE account(s):`);
+
+  for (const account of accounts) {
+    try {
+      const res = UrlFetchApp.fetch("https://api.line.me/v2/bot/info", {
+        method: "get",
+        headers: { Authorization: `Bearer ${account.token}` },
+        muteHttpExceptions: true,
+        followRedirects: true,
+        validateHttpsCertificates: true,
+      });
+
+      const code = res.getResponseCode();
+      if (code === 200) {
+        const info = JSON.parse(res.getContentText());
+        console.log(`✓ ${account.name}: Connected successfully`);
+        console.log(`  - Bot name: ${info.displayName || "N/A"}`);
+        console.log(`  - Basic ID: ${info.basicId || "N/A"}`);
+      } else {
+        console.log(`✗ ${account.name}: Failed (${code})`);
+        console.log(`  - Error: ${res.getContentText()}`);
+      }
+    } catch (err) {
+      console.log(`✗ ${account.name}: Error - ${err.toString()}`);
+    }
+  }
 }
 
-// 送信テスト（承認フローの強制）
-function testLineNotify() {
-  sendLine("LINE Notify connection OK");
+// 全LINEアカウントへのテスト送信
+function testAllLineNotify() {
+  const accounts = getLineAccounts();
+
+  if (accounts.length === 0) {
+    console.log("No LINE accounts configured");
+    return;
+  }
+
+  const testMessage = {
+    type: "text",
+    text: `【テスト送信】\n${
+      accounts.length
+    }個のLINE公式アカウントへの接続テスト\n送信時刻: ${formatJst(new Date())}`,
+  };
+
+  console.log(`Sending test message to ${accounts.length} account(s)...`);
+  pushLineMessageToAll(testMessage);
+  console.log("Test message sent successfully!");
 }
 
 // 予約メール本文から「■氏名」の次行を抽出
@@ -754,4 +845,34 @@ function extractFieldAfter(text, label) {
 
 function trimJaSpaces(s) {
   return (s || "").replace(/[\u3000\s]+$/g, "").replace(/^[\u3000\s]+/g, "");
+}
+
+// 設定内容を表示（デバッグ用）
+function showConfiguration() {
+  const props = PropertiesService.getScriptProperties();
+  const accounts = getLineAccounts();
+
+  console.log("=== 現在の設定 ===");
+  console.log(
+    `Target Email: ${
+      props.getProperty(PROP_KEYS.targetEmail) || CONFIG_DEFAULTS.targetEmail
+    }`
+  );
+  console.log(
+    `Calendar ID: ${
+      props.getProperty(PROP_KEYS.calendarId) || CONFIG_DEFAULTS.calendarId
+    }`
+  );
+  console.log(
+    `Timezone: ${
+      props.getProperty(PROP_KEYS.timezone) || CONFIG_DEFAULTS.timezone
+    }`
+  );
+  console.log(`LINE Accounts: ${accounts.length} account(s)`);
+
+  accounts.forEach((acc, idx) => {
+    console.log(`  ${idx + 1}. ${acc.name}`);
+  });
+
+  console.log("==================");
 }
