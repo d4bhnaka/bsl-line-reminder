@@ -365,10 +365,18 @@ function notifyLineNow(meta, schedule, customerName) {
 }
 
 function notifyLineFallback(meta) {
-  // 本文抜粋を整形（最大200文字に制限）
   let snippetText = "";
   if (meta.snippet && meta.snippet.trim()) {
-    const trimmedSnippet = meta.snippet.trim();
+    let trimmedSnippet = meta.snippet.trim();
+
+    // "PC版SALON BOARD"以降を削除
+    const cutoffText = "PC版SALON BOARD";
+    const cutoffIndex = trimmedSnippet.indexOf(cutoffText);
+    if (cutoffIndex !== -1) {
+      trimmedSnippet = trimmedSnippet.substring(0, cutoffIndex).trim();
+    }
+
+    // 本文抜粋を整形（最大200文字に制限）
     if (trimmedSnippet.length > 200) {
       snippetText = `本文抜粋: ${trimmedSnippet.substring(0, 200)}...`;
     } else {
