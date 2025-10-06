@@ -359,7 +359,6 @@ function notifyLineNow(meta, schedule, customerName) {
       schedule.end ? ` - ${formatJst(schedule.end)}` : ""
     }`,
     `本文抜粋: ${meta.snippet}`,
-    `Gmail: ${meta.permalink}`,
   ].join("\n");
   pushLineMessageToAll({ type: "text", text });
 }
@@ -394,8 +393,6 @@ function notifyLineFallback(meta) {
   if (snippetText) {
     textParts.push(snippetText);
   }
-
-  textParts.push(`Gmail: ${meta.permalink}`);
 
   const text = textParts.join("\n");
   pushLineMessageToAll({ type: "text", text });
