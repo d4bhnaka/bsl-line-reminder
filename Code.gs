@@ -110,15 +110,45 @@ function pollEmails() {
 }
 
 /**
+ * 本文から所要時間目安を抽出
+ * 例: （所要時間目安：3時間25分） → 205分を返す
+ * 所要時間目安が見つからない場合はデフォルト120分（2時間）を返す
+ */
+function parseDurationEstimate(text) {
+  const match = text.match(/所要時間目安[：:]\s*(\d+)\s*時間\s*(\d+)\s*分/);
+  if (match) {
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    return hours * 60 + minutes;
+  }
+
+  const hourOnlyMatch = text.match(/所要時間目安[：:]\s*(\d+)\s*時間/);
+  if (hourOnlyMatch) {
+    return Number(hourOnlyMatch[1]) * 60;
+  }
+
+  const minuteOnlyMatch = text.match(/所要時間目安[：:]\s*(\d+)\s*分/);
+  if (minuteOnlyMatch) {
+    return Number(minuteOnlyMatch[1]);
+  }
+
+  return 120; // デフォルト2時間
+}
+
+/**
  * 本文から日時を抽出（日本語表現に対応した簡易ルール）
  * - 優先度: YYYY/M/D HH:mm → M/D HH:mm → M月D日 HH時mm分 → 日付のみ（既定10:00）
  * - 年未指定: 今年、かつ過去なら翌年
  * - 時刻未指定: 10:00
  * - 範囲表現: 14:00-15:00 / 14時〜15時 → endに反映（分省略=00）
+ * - 所要時間目安を反映して終了時間を設定
  */
 function parseSchedule(text, tz) {
   const now = new Date();
   const currentYear = now.getFullYear();
+
+  // 所要時間目安を抽出（デフォルト2時間）
+  const durationMinutes = parseDurationEstimate(text);
 
   // 先に「■来店日時」セクションを優先抽出
   const visitLine = extractFieldAfter(text, "■来店日時");
@@ -137,10 +167,13 @@ function parseSchedule(text, tz) {
       const he = m[6] ? Number(m[6]) : undefined;
       const mine = m[7] ? Number(m[7]) : 0;
       const start = buildDate(ys, ms, ds, hs, mins, tz);
-      const end =
-        typeof he === "number"
-          ? buildDate(ys, ms, ds, he, mine, tz)
-          : undefined;
+      let end;
+      if (typeof he === "number") {
+        end = buildDate(ys, ms, ds, he, mine, tz);
+      } else {
+        // 終了時間が指定されていない場合は所要時間目安を使用
+        end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+      }
       return {
         start,
         end: end && end > start ? end : undefined,
@@ -159,7 +192,8 @@ function parseSchedule(text, tz) {
       const hs = Number(m[4]);
       const mins = m[5] ? Number(m[5]) : 0;
       const start = buildDate(ys, ms, ds, hs, mins, tz);
-      return { start, isAllDay: false, sourceText: m[0] };
+      const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+      return { start, end, isAllDay: false, sourceText: m[0] };
     }
     // c) M月D日 HH:mm / HH時mm分
     m = v.match(
@@ -174,7 +208,8 @@ function parseSchedule(text, tz) {
       const startCandidate = buildDate(year, ms, ds, hs, mins, tz);
       if (startCandidate.getTime() < now.getTime() - 60 * 60 * 1000) year += 1;
       const start = buildDate(year, ms, ds, hs, mins, tz);
-      return { start, isAllDay: false, sourceText: m[0] };
+      const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+      return { start, end, isAllDay: false, sourceText: m[0] };
     }
   }
 
@@ -192,10 +227,13 @@ function parseSchedule(text, tz) {
       const he = m[6] ? Number(m[6]) : undefined;
       const mine = m[7] ? Number(m[7]) : 0;
       const start = buildDate(ys, ms, ds, hs, mins, tz);
-      const end =
-        typeof he === "number"
-          ? buildDate(ys, ms, ds, he, mine, tz)
-          : undefined;
+      let end;
+      if (typeof he === "number") {
+        end = buildDate(ys, ms, ds, he, mine, tz);
+      } else {
+        // 終了時間が指定されていない場合は所要時間目安を使用
+        end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+      }
       return {
         start,
         end: end && end > start ? end : undefined,
@@ -223,10 +261,13 @@ function parseSchedule(text, tz) {
         year += 1; // 過去なら翌年
       }
       const start = buildDate(year, ms, ds, hs, mins, tz);
-      const end =
-        typeof he === "number"
-          ? buildDate(year, ms, ds, he, mine, tz)
-          : undefined;
+      let end;
+      if (typeof he === "number") {
+        end = buildDate(year, ms, ds, he, mine, tz);
+      } else {
+        // 終了時間が指定されていない場合は所要時間目安を使用
+        end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+      }
       return {
         start,
         end: end && end > start ? end : undefined,
@@ -254,10 +295,13 @@ function parseSchedule(text, tz) {
         year += 1;
       }
       const start = buildDate(year, ms, ds, hs, mins, tz);
-      const end =
-        typeof he === "number"
-          ? buildDate(year, ms, ds, he, mine, tz)
-          : undefined;
+      let end;
+      if (typeof he === "number") {
+        end = buildDate(year, ms, ds, he, mine, tz);
+      } else {
+        // 終了時間が指定されていない場合は所要時間目安を使用
+        end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+      }
       return {
         start,
         end: end && end > start ? end : undefined,
@@ -267,7 +311,7 @@ function parseSchedule(text, tz) {
     }
   }
 
-  // 4) 日付のみ（M/D or M月D日）→ 既定時刻(10:00)
+  // 4) 日付のみ（M/D or M月D日）→ 既定時刻(10:00)、所要時間目安を終了時間に反映
   {
     const rx1 = /(\d{1,2})[\/\-\.](\d{1,2})(?:\s*\([^)]+\))?/;
     const rx2 = /(\d{1,2})月(\d{1,2})日(?:\s*\([^)]+\))?/;
@@ -283,7 +327,7 @@ function parseSchedule(text, tz) {
         year += 1;
       }
       const start = buildDate(year, ms, ds, 10, 0, tz);
-      const end = buildDate(year, ms, ds, 11, 0, tz);
+      const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
       return { start, end, isAllDay: false, sourceText: m[0] };
     }
   }
@@ -332,7 +376,7 @@ function createCalendarEvent(schedule, meta, customerName, emailBody) {
     const end =
       schedule.end && schedule.end > start
         ? schedule.end
-        : new Date(start.getTime() + 60 * 60 * 1000);
+        : new Date(start.getTime() + 120 * 60 * 1000); // デフォルト2時間
     event = calendar.createEvent(title, start, end, {
       description,
       guests: "",
