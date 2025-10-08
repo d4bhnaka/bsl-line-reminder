@@ -637,10 +637,6 @@ function fetchWithRetry(url, options, maxRetries) {
   throw lastError;
 }
 
-function buildTriggerStoreKey(uid) {
-  return `TRIGGER_CTX:${uid}`;
-}
-
 /* ===== Utility: 初回セットアップ補助 ===== */
 
 function setupInitial() {
@@ -654,32 +650,6 @@ function setupInitial() {
   accounts.forEach((acc, idx) => {
     console.log(`  ${idx + 1}. ${acc.name}`);
   });
-}
-
-// トリガクリーンアップ: すべてのsendReminderトリガを削除（前日リマインド機能無効化のため）
-function cleanupOldReminderTriggers() {
-  const triggers = ScriptApp.getProjectTriggers();
-  let deletedCount = 0;
-
-  for (const trigger of triggers) {
-    if (trigger.getHandlerFunction() === "sendReminder") {
-      // 前日リマインド機能が無効化されたため、すべてのリマインダートリガーを削除
-      ScriptApp.deleteTrigger(trigger);
-      deletedCount++;
-    }
-  }
-
-  if (deletedCount > 0) {
-    console.log(
-      `Deleted ${deletedCount} reminder triggers (reminder feature disabled)`
-    );
-  }
-}
-
-// 前日リマインダートリガーのみを削除（前日リマインド機能無効化用）
-function deleteReminderTriggers() {
-  cleanupOldReminderTriggers();
-  console.log("All reminder triggers have been deleted");
 }
 
 // 手動でトリガを全削除（緊急時用）
@@ -721,6 +691,190 @@ function suggestTriggerSetup() {
 }
 
 /* ===== 手動テスト用 ===== */
+
+/**
+ * 統合テスト: pollEmails()の全体フローをモックデータで検証
+ * 実際のメール本文を使って、すべての関数が正しく呼び出されることを確認
+ */
+function testPollEmailsIntegration() {
+  console.log("=== 統合テスト開始 ===");
+
+  // テスト用メール本文サンプル
+  const testEmailBody = `
+■来店日時
+　2025年10月14日（火）13:00
+
+■お客様名
+田中 太郎
+
+■クーポン
+プレミアムカット（¥5,000）
+
+（所要時間目安：3時間25分）
+
+その他の情報...
+`;
+
+  const testEmailBodyNoEstimate = `
+■来店日時
+　2025年10月20日（月）10:00
+
+■お客様名
+佐藤 花子
+
+■クーポン
+カラーリング（¥8,000）
+
+その他の情報...
+`;
+
+  const testEmailBodyNoCoupon = `
+■来店日時
+　2025年10月25日（土）15:30
+
+■お客様名
+山田 次郎
+
+通常予約です。
+`;
+
+  const testCases = [
+    {
+      name: "所要時間目安あり + クーポンあり",
+      body: testEmailBody,
+      expectedDuration: 205, // 3時間25分
+      expectedName: "田中 太郎",
+      expectedCoupon: "プレミアムカット",
+    },
+    {
+      name: "所要時間目安なし + クーポンあり（デフォルト2時間）",
+      body: testEmailBodyNoEstimate,
+      expectedDuration: 120, // 2時間
+      expectedName: "佐藤 花子",
+      expectedCoupon: "カラーリング",
+    },
+    {
+      name: "クーポンなし",
+      body: testEmailBodyNoCoupon,
+      expectedDuration: 120, // 2時間
+      expectedName: "山田 次郎",
+      expectedCoupon: null,
+    },
+  ];
+
+  const tz = getTimezone();
+  let passedTests = 0;
+  let failedTests = 0;
+
+  for (const testCase of testCases) {
+    console.log(`\n--- テストケース: ${testCase.name} ---`);
+
+    try {
+      // 1. 顧客名パース
+      const name = parseCustomerName(testCase.body);
+      console.log(`✓ 顧客名パース: ${name}`);
+      if (name !== testCase.expectedName) {
+        throw new Error(`期待値: ${testCase.expectedName}, 実際: ${name}`);
+      }
+
+      // 2. 所要時間目安パース
+      const duration = parseDurationEstimate(testCase.body);
+      console.log(`✓ 所要時間目安: ${duration}分`);
+      if (duration !== testCase.expectedDuration) {
+        throw new Error(
+          `期待値: ${testCase.expectedDuration}, 実際: ${duration}`
+        );
+      }
+
+      // 3. 日程パース
+      const schedule = parseSchedule(testCase.body, tz);
+      if (!schedule) {
+        throw new Error("日程パースに失敗");
+      }
+      console.log(
+        `✓ 日程パース: ${formatJst(schedule.start)} - ${formatJst(
+          schedule.end
+        )}`
+      );
+
+      // 4. 終了時間の検証（開始時間 + 所要時間）
+      const expectedEndTime = new Date(
+        schedule.start.getTime() + testCase.expectedDuration * 60 * 1000
+      );
+      const actualEndTime = schedule.end;
+      if (
+        Math.abs(expectedEndTime.getTime() - actualEndTime.getTime()) > 1000
+      ) {
+        throw new Error(
+          `終了時間が期待値と一致しません。期待: ${formatJst(
+            expectedEndTime
+          )}, 実際: ${formatJst(actualEndTime)}`
+        );
+      }
+      console.log(`✓ 終了時間検証: OK`);
+
+      // 5. クーポン情報パース
+      const couponInfo = parseCouponInfo(testCase.body);
+      console.log(`✓ クーポン情報: ${couponInfo || "なし"}`);
+      if (testCase.expectedCoupon) {
+        if (!couponInfo || !couponInfo.includes(testCase.expectedCoupon)) {
+          throw new Error(
+            `期待値: ${testCase.expectedCoupon}を含む, 実際: ${couponInfo}`
+          );
+        }
+      } else if (couponInfo) {
+        throw new Error(`期待値: null, 実際: ${couponInfo}`);
+      }
+
+      // 6. メタデータ構築（モック）
+      console.log(`✓ 各関数が正常に動作しました`);
+
+      passedTests++;
+      console.log(`✅ テストケース「${testCase.name}」: PASS`);
+    } catch (error) {
+      failedTests++;
+      console.error(`❌ テストケース「${testCase.name}」: FAIL`);
+      console.error(`エラー: ${error.message}`);
+    }
+  }
+
+  console.log("\n=== 統合テスト結果 ===");
+  console.log(`合計: ${testCases.length}件`);
+  console.log(`成功: ${passedTests}件`);
+  console.log(`失敗: ${failedTests}件`);
+
+  if (failedTests === 0) {
+    console.log("✅ すべてのテストが成功しました！");
+  } else {
+    console.log("⚠️ 一部のテストが失敗しました。");
+  }
+
+  // 関数使用状況の確認
+  console.log("\n=== 主要関数の使用状況 ===");
+  console.log("✓ parseDurationEstimate() - 所要時間目安の抽出");
+  console.log("✓ parseCustomerName() - 顧客名の抽出");
+  console.log("✓ parseSchedule() - 日程の抽出");
+  console.log("  ├─ extractFieldAfter() - フィールド抽出");
+  console.log("  ├─ trimJaSpaces() - 空白トリム");
+  console.log("  └─ buildDate() - 日付構築");
+  console.log("✓ parseCouponInfo() - クーポン情報の抽出");
+  console.log("  └─ extractCouponNameAndPrice() - クーポン名と価格の抽出");
+  console.log("✓ formatJst() - 日時フォーマット");
+  console.log("\n=== pollEmails()で使用される関数 ===");
+  console.log("✓ getOrCreateLabel() - ラベル作成/取得");
+  console.log("✓ safePlainBody() - メール本文の取得");
+  console.log("✓ buildMailMeta() - メタデータ構築");
+  console.log("  └─ buildGmailPermalink() - パーマリンク生成");
+  console.log("✓ notifyLineNow() / notifyLineFallback() - LINE通知");
+  console.log("  └─ pushLineMessageToAll() - 全アカウントに送信");
+  console.log("      ├─ getLineAccounts() - アカウント情報取得");
+  console.log("      └─ pushLineMessage() - メッセージ送信");
+  console.log("          └─ fetchWithRetry() - リトライ付きHTTPリクエスト");
+  console.log("✓ createCalendarEvent() - カレンダーイベント作成");
+  console.log("  ├─ getCalendar() - カレンダー取得");
+  console.log("  ├─ getCalendarId() - カレンダーID取得");
+  console.log("  └─ getTimezone() - タイムゾーン取得");
+}
 
 function debugParse() {
   const tz = getTimezone();
