@@ -392,17 +392,166 @@ function createCalendarEvent(schedule, meta, customerName, emailBody) {
   return event.getId();
 }
 
+/**
+ * メール本文から予約詳細情報を抽出してフォーマットされた文字列を返す
+ * @param {string} text - メール本文
+ * @returns {string} - フォーマットされた予約詳細情報
+ */
+function extractReservationDetails(text) {
+  const lines = text.split(/\r?\n/);
+  const details = [];
+
+  // ◇ご予約内容セクションを探す
+  let inReservationSection = false;
+  let inTotalSection = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // ◇ご予約内容セクションの開始
+    if (line.includes("◇ご予約内容")) {
+      inReservationSection = true;
+      details.push("◇ご予約内容");
+      continue;
+    }
+
+    // PC版SALON BOARDが来たら終了
+    if (line.includes("PC版SALON BOARD")) {
+      break;
+    }
+
+    // ◇ご予約付加情報が来たら終了
+    if (line.includes("◇ご予約付加情報")) {
+      break;
+    }
+
+    if (inReservationSection) {
+      // ■予約番号
+      if (line.includes("■予約番号")) {
+        details.push("■予約番号");
+        // 次の非空行を取得
+        for (let j = i + 1; j < lines.length; j++) {
+          const nextLine = lines[j].trim();
+          if (nextLine && !nextLine.startsWith("■")) {
+            details.push(`　${nextLine}`);
+            break;
+          }
+        }
+      }
+
+      // ■氏名
+      else if (line.includes("■氏名")) {
+        details.push("■氏名");
+        // 次の非空行を取得
+        for (let j = i + 1; j < lines.length; j++) {
+          const nextLine = lines[j].trim();
+          if (nextLine && !nextLine.startsWith("■")) {
+            details.push(`　${nextLine}`);
+            break;
+          }
+        }
+      }
+
+      // ■来店日時
+      else if (line.includes("■来店日時")) {
+        details.push("■来店日時");
+        // 次の非空行を取得
+        for (let j = i + 1; j < lines.length; j++) {
+          const nextLine = lines[j].trim();
+          if (nextLine && !nextLine.startsWith("■")) {
+            details.push(`　${nextLine}`);
+            break;
+          }
+        }
+      }
+
+      // ■指名スタッフ
+      else if (line.includes("■指名スタッフ")) {
+        details.push("■指名スタッフ");
+        // 次の非空行を取得
+        for (let j = i + 1; j < lines.length; j++) {
+          const nextLine = lines[j].trim();
+          if (nextLine && !nextLine.startsWith("■")) {
+            details.push(`　${nextLine}`);
+            break;
+          }
+        }
+      }
+
+      // ■メニュー
+      else if (line.includes("■メニュー")) {
+        details.push("■メニュー");
+        // メニュー内容を複数行取得（所要時間目安の行まで）
+        for (let j = i + 1; j < lines.length; j++) {
+          const nextLine = lines[j];
+          if (nextLine.trim() && !nextLine.startsWith("■")) {
+            details.push(nextLine);
+          } else if (nextLine.startsWith("■")) {
+            break;
+          }
+        }
+      }
+
+      // ■ご利用クーポン
+      else if (line.includes("■ご利用クーポン")) {
+        details.push("■ご利用クーポン");
+        // クーポン内容を複数行取得（次の■まで）
+        for (let j = i + 1; j < lines.length; j++) {
+          const nextLine = lines[j];
+          // 次の■で始まる行が来たら終了
+          if (nextLine.trim().startsWith("■")) {
+            break;
+          }
+          // 空行でない場合、内容を追加
+          if (nextLine.trim()) {
+            details.push(nextLine);
+          }
+        }
+      }
+
+      // ■合計金額
+      else if (line.includes("■合計金額")) {
+        inTotalSection = true;
+        details.push("■合計金額");
+      }
+
+      // 合計金額セクション内
+      else if (inTotalSection) {
+        const trimmedLine = line.trim();
+        // 予約時合計金額、利用ギフト券、利用ポイント、お支払い予定金額のみ取得
+        if (
+          trimmedLine.includes("予約時合計金額") ||
+          trimmedLine.includes("今回の利用ギフト券") ||
+          trimmedLine.includes("今回の利用ポイント") ||
+          trimmedLine.includes("お支払い予定金額")
+        ) {
+          details.push(line);
+        }
+        // ※表示金額は...の注意書きが来たら終了
+        else if (trimmedLine.startsWith("※")) {
+          inTotalSection = false;
+        }
+      }
+    }
+  }
+
+  return details.join("\n");
+}
+
 function notifyLineNow(meta, schedule, customerName) {
   const safeName = (customerName || "ご予約").replace(/[\s　]+/g, " ").trim();
+
+  // メール本文から予約詳細情報を抽出
+  const body = meta.fullBody || meta.snippet;
+  const reservationDetails = extractReservationDetails(body);
+
   const text = [
     "【新着予約】SALON BOARD",
     `お名前: ${safeName}さま`,
-    `件名: ${meta.subject}`,
-    `差出人: ${meta.from}`,
     `日程: ${formatJst(schedule.start)}${
       schedule.end ? ` - ${formatJst(schedule.end)}` : ""
     }`,
-    `本文抜粋: ${meta.snippet}`,
+    reservationDetails,
   ].join("\n");
   pushLineMessageToAll({ type: "text", text });
 }
@@ -427,11 +576,7 @@ function notifyLineFallback(meta) {
     }
   }
 
-  const textParts = [
-    "【新着メール】日程抽出に失敗しました",
-    `件名: ${meta.subject}`,
-    `差出人: ${meta.from}`,
-  ];
+  const textParts = ["【新着メール】日程抽出に失敗しました"];
 
   // 本文抜粋がある場合のみ追加
   if (snippetText) {
@@ -566,6 +711,7 @@ function safePlainBody(msg) {
 }
 
 function buildMailMeta(thread, msg) {
+  const plainBody = msg.getPlainBody() || "";
   return {
     threadId: thread.getId(),
     messageId: String(msg.getId()),
@@ -573,7 +719,8 @@ function buildMailMeta(thread, msg) {
     from: msg.getFrom() || "",
     to: msg.getTo() || "",
     cc: msg.getCc() || "",
-    snippet: (msg.getPlainBody() || "").split("\n").join(" "),
+    snippet: plainBody.split("\n").join(" "),
+    fullBody: plainBody,
     permalink: buildGmailPermalink(thread.getId()),
     receivedAt: msg.getDate(),
   };
@@ -1078,4 +1225,109 @@ function showConfiguration() {
   });
 
   console.log("==================");
+}
+
+/**
+ * LINE通知フォーマットのテスト関数
+ * 実際のメール本文を使って、extractReservationDetails関数の動作を確認
+ */
+function testLineNotificationFormat() {
+  console.log("=== LINE通知フォーマットテスト開始 ===\n");
+
+  // 実際のメール本文サンプル
+  const testEmailBody = `パーソナルカラー診断・顔タイプの診断・骨格診断 専門サロン　be style lab 名古屋様
+
+HOT PEPPER Beauty「SALON BOARD」にお客様から
+ご予約が入りました。
+
+◇ご予約内容
+■予約番号
+　BD73586018
+■氏名
+　吉留 美里（ヨシトメ ミサト）
+■来店日時
+　2025年10月14日（火）15:30
+■指名スタッフ
+　指名なし
+■メニュー
+　ボディトリ＋ボディケア＋アート＋フェイシャル＋ボディ＋ブライダル＋その他
+　（所要時間目安：2時間）
+■ご利用クーポン
+　[全員]
+　"可愛い"も"綺麗"も叶える！顔診断+似合わせフルメイク/通常\\30000→\\19800
+　　顔のバランスや雰囲気からあなたが1番輝くメイクをご提案！調和の取れた印象で魅力を最大限に引き出します★16type顔診断+フルメイク＋StyleBook付+AIコンシェルジュ+無期限Afterfollow付き
+■合計金額
+　予約時合計金額　19,800円
+　今回の利用ギフト券　利用なし
+　今回の利用ポイント　利用なし
+　お支払い予定金額　19,800円
+※表示金額は、予約時に選択したメニュー金額(クーポン適用の場合は適用後の金額)の合計金額です。来店時のメニュー変更、サロンが別途設定するスタッフ指名料等の追加料金やキャンセル料等により、実際の支払額と異なる場合があります。
+追加料金についてはこちらから↓
+https://beauty.help.hotpepper.jp/s/article/000031948
+◇ご予約付加情報
+■なりたいイメージ
+　なし
+■ご要望・ご相談
+　-
+■サロンからお客様への質問
+　質問：【重要】
+予約後すぐに公式LINEにお名前の送信をお願いいたします。（登録だけでは連絡ができません）公式LINEへは、Webサイトもしくはインスタグラムからアクセス可能です。「ビースタイルラボ」で検索
+※ お電話での対応は一切行っておりません。すべて公式LINEのトークからお願いします。
+※ 当サロンは女性専用となっております。男性や男女カップルの診断は行っておりませんので予めご了承ください。
+　回答：yoshitome.m
+
+PC版SALON BOARD
+https://salonboard.com/login/
+スマートフォン版SALON BOARD
+https://salonboard.com/login_sp/
+
+予約受付日時：2025年10月14日（火）00:25
+
+===================================================
+SALON BOARD・HOT PEPPER Beauty
+お問い合わせ：https://sbhd-kirei.salonboard.com/hc/ja/articles/360039395113
+===================================================`;
+
+  // 予約詳細情報を抽出
+  const reservationDetails = extractReservationDetails(testEmailBody);
+
+  // 顧客名を抽出
+  const customerName = parseCustomerName(testEmailBody);
+
+  // 日程を抽出
+  const schedule = parseSchedule(testEmailBody, getTimezone());
+
+  // 完全なLINE通知メッセージを構築
+  const safeName = (customerName || "ご予約").replace(/[\s　]+/g, " ").trim();
+  const fullMessage = [
+    "【新着予約】SALON BOARD",
+    `お名前: ${safeName}さま`,
+    `日程: ${schedule ? formatJst(schedule.start) : "日程不明"}${
+      schedule && schedule.end ? ` - ${formatJst(schedule.end)}` : ""
+    }`,
+    reservationDetails,
+  ].join("\n");
+
+  console.log("=== 抽出された顧客名 ===");
+  console.log(customerName);
+  console.log("");
+
+  console.log("=== 抽出された日程 ===");
+  if (schedule) {
+    console.log(`開始: ${formatJst(schedule.start)}`);
+    console.log(`終了: ${formatJst(schedule.end)}`);
+  } else {
+    console.log("日程の抽出に失敗しました");
+  }
+  console.log("");
+
+  console.log("=== 抽出された予約詳細 ===");
+  console.log(reservationDetails);
+  console.log("");
+
+  console.log("=== 完全なLINE通知メッセージ ===");
+  console.log(fullMessage);
+  console.log("");
+
+  console.log("=== テスト完了 ===");
 }
