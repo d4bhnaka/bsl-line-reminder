@@ -17,21 +17,33 @@ pollEmails() [エントリーポイント]
 │   ├─ buildMailMeta() ← メタデータ構築
 │   │   └─ buildGmailPermalink() ← パーマリンク生成
 │   │
-│   ├─ [scheduleがある場合]
-│   │   ├─ notifyLineNow() ← LINE通知（成功時）
-│   │   │   ├─ formatJst() ← 日時フォーマット
-│   │   │   └─ pushLineMessageToAll() ← 全アカウントに送信
-│   │   │       ├─ getLineAccounts() ← アカウント情報取得
-│   │   │       └─ pushLineMessage() ← メッセージ送信
-│   │   │           └─ fetchWithRetry() ← リトライ付きHTTPリクエスト
+│   ├─ [ラベル判定による処理分岐]
+│   │   ├─ [キャンセル連絡ラベルがある場合]
+│   │   │   ├─ notifyLineCancellation() ← LINE通知（キャンセル通知）
+│   │   │   │   ├─ formatJst() ← 日時フォーマット
+│   │   │   │   └─ pushLineMessageToAll() ← 全アカウントに送信
+│   │   │   │       ├─ getLineAccounts() ← アカウント情報取得
+│   │   │   │       └─ pushLineMessage() ← メッセージ送信
+│   │   │   │           └─ fetchWithRetry() ← リトライ付きHTTPリクエスト
+│   │   │   │
+│   │   │   └─ deleteCalendarEvent() ← カレンダーイベント削除
+│   │   │       ├─ getCalendar() ← カレンダー取得
+│   │   │       └─ formatJst() ← 日時フォーマット（ログ用）
 │   │   │
-│   │   ├─ createCalendarEvent() ← カレンダーイベント作成
-│   │   │   ├─ getCalendar() ← カレンダー取得
-│   │   │   ├─ getCalendarId() ← カレンダーID取得
-│   │   │   └─ parseCouponInfo() ← クーポン情報の抽出
-│   │   │       └─ extractCouponNameAndPrice() ← クーポン名と価格の抽出
-│   │   │
-│   │   └─ parseCouponInfo() ← クーポン情報の抽出（タイトル用）
+│   │   └─ [予約連絡ラベルがある場合、またはラベルなし]
+│   │       ├─ notifyLineNow() ← LINE通知（予約通知）
+│   │       │   ├─ formatJst() ← 日時フォーマット
+│   │       │   ├─ extractReservationDetails() ← 予約詳細情報の抽出
+│   │       │   └─ pushLineMessageToAll() ← 全アカウントに送信
+│   │       │       └─ （上記と同じ）
+│   │       │
+│   │       ├─ createCalendarEvent() ← カレンダーイベント作成
+│   │       │   ├─ getCalendar() ← カレンダー取得
+│   │       │   ├─ getCalendarId() ← カレンダーID取得
+│   │       │   └─ parseCouponInfo() ← クーポン情報の抽出
+│   │       │       └─ extractCouponNameAndPrice() ← クーポン名と価格の抽出
+│   │       │
+│   │       └─ parseCouponInfo() ← クーポン情報の抽出（タイトル用）
 │   │
 │   └─ [scheduleがない場合]
 │       └─ notifyLineFallback() ← LINE通知（失敗時）
@@ -45,7 +57,7 @@ pollEmails() [エントリーポイント]
 
 - `pollEmails()` - トリガーから実行されるメイン関数
 
-### レベル 1: pollEmails()から直接呼び出される関数（8 個）
+### レベル 1: pollEmails()から直接呼び出される関数（11 個）
 
 1. `getOrCreateLabel()` - ラベル作成/取得
 2. `safePlainBody()` - メール本文取得
@@ -53,22 +65,25 @@ pollEmails() [エントリーポイント]
 4. `parseSchedule()` - 日程抽出
 5. `getTimezone()` - タイムゾーン取得
 6. `buildMailMeta()` - メタデータ構築
-7. `notifyLineNow()` - LINE 通知（成功時）
-8. `createCalendarEvent()` - カレンダーイベント作成
-9. `parseCouponInfo()` - クーポン情報抽出
-10. `notifyLineFallback()` - LINE 通知（失敗時）
+7. `notifyLineNow()` - LINE 通知（予約通知）
+8. `notifyLineCancellation()` - LINE 通知（キャンセル通知）★NEW
+9. `createCalendarEvent()` - カレンダーイベント作成
+10. `deleteCalendarEvent()` - カレンダーイベント削除 ★NEW
+11. `parseCouponInfo()` - クーポン情報抽出
+12. `notifyLineFallback()` - LINE 通知（失敗時）
 
-### レベル 2: レベル 1 から呼び出される関数（9 個）
+### レベル 2: レベル 1 から呼び出される関数（11 個）
 
 1. `parseDurationEstimate()` ← parseSchedule()
 2. `extractFieldAfter()` ← parseSchedule()
 3. `buildDate()` ← parseSchedule()
 4. `buildGmailPermalink()` ← buildMailMeta()
-5. `formatJst()` ← notifyLineNow()
-6. `pushLineMessageToAll()` ← notifyLineNow(), notifyLineFallback()
-7. `getCalendar()` ← createCalendarEvent()
-8. `getCalendarId()` ← createCalendarEvent()
-9. `extractCouponNameAndPrice()` ← parseCouponInfo()
+5. `formatJst()` ← notifyLineNow(), notifyLineCancellation(), deleteCalendarEvent()
+6. `extractReservationDetails()` ← notifyLineNow()
+7. `pushLineMessageToAll()` ← notifyLineNow(), notifyLineCancellation(), notifyLineFallback()
+8. `getCalendar()` ← createCalendarEvent(), deleteCalendarEvent()
+9. `getCalendarId()` ← createCalendarEvent()
+10. `extractCouponNameAndPrice()` ← parseCouponInfo()
 
 ### レベル 3: レベル 2 から呼び出される関数（3 個）
 
@@ -100,11 +115,11 @@ pollEmails() [エントリーポイント]
 
 ## 統計
 
-- **合計関数数**: 34 個
-- **pollEmails()から使用される関数**: 24 個
+- **合計関数数**: 36 個（+2）
+- **pollEmails()から使用される関数**: 26 個（+2）
   - レベル 0: 1 個（エントリーポイント）
-  - レベル 1: 10 個（直接呼び出し）
-  - レベル 2: 9 個（間接呼び出し）
+  - レベル 1: 12 個（直接呼び出し）+2
+  - レベル 2: 10 個（間接呼び出し）+1
   - レベル 3: 3 個（間接呼び出し）
   - レベル 4: 1 個（間接呼び出し）
 - **手動実行のみ**: 10 個
@@ -119,12 +134,13 @@ pollEmails() [エントリーポイント]
 - `parseCustomerName()` - メール 1 通につき 1 回
 - `parseSchedule()` - メール 1 通につき 1 回
 - `buildMailMeta()` - メール 1 通につき 1 回
-- `notifyLineNow()` または `notifyLineFallback()` - メール 1 通につき 1 回
+- `notifyLineNow()` または `notifyLineCancellation()` または `notifyLineFallback()` - メール 1 通につき 1 回
 
 ### 中頻度（スケジュールがある場合のみ）
 
-- `createCalendarEvent()` - スケジュール抽出成功時のみ
-- `parseCouponInfo()` - スケジュール抽出成功時のみ（2 回呼び出される）
+- `createCalendarEvent()` - 予約連絡かつスケジュール抽出成功時のみ
+- `deleteCalendarEvent()` - キャンセル連絡かつスケジュール抽出成功時のみ ★NEW
+- `parseCouponInfo()` - 予約連絡かつスケジュール抽出成功時のみ（2 回呼び出される）
 
 ### 低頻度（初回のみ）
 
@@ -166,9 +182,11 @@ buildMailMeta() → メタデータ
 ```
 parseSchedule()
     ↓
-    ├─ [成功] → notifyLineNow() + createCalendarEvent()
+    ├─ [成功]
+    │   ├─ [キャンセル連絡] → notifyLineCancellation() + deleteCalendarEvent()
+    │   └─ [予約連絡] → notifyLineNow() + createCalendarEvent()
     └─ [失敗] → notifyLineFallback()
-                 └→ LINE通知のみ（カレンダー登録なし）
+                 └→ LINE通知のみ（カレンダー操作なし）
 ```
 
 ## 最適化ポイント

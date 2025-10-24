@@ -18,6 +18,8 @@
 const LABELS = Object.freeze({
   target: "to-line",
   processed: "processed-line",
+  reservation: "予約連絡",
+  cancellation: "キャンセル連絡",
 });
 
 const PROP_KEYS = Object.freeze({
@@ -77,26 +79,42 @@ function pollEmails() {
       const schedule = parseSchedule(body, getTimezone());
       const meta = buildMailMeta(thread, msg);
 
-      if (schedule) {
-        notifyLineNow(meta, schedule, name);
-        const eventId = createCalendarEvent(schedule, meta, name, body);
-        // クーポン情報を含むタイトルを作成
-        const couponInfo = parseCouponInfo(body);
-        const titleForReminder = couponInfo
-          ? `${name}さま - ${couponInfo}`
-          : `${name}さま予約`;
+      // ラベルによる処理の分岐
+      const labels = thread.getLabels().map((label) => label.getName());
+      const isReservation = labels.includes(LABELS.reservation);
+      const isCancellation = labels.includes(LABELS.cancellation);
 
-        // 前日LINEリマインド機能は無効化されています
-        // scheduleReminder(schedule, {
-        //   eventId,
-        //   calendarId: getCalendarId(),
-        //   title: titleForReminder,
-        //   start: schedule.start.toISOString(),
-        //   threadPermalink: meta.permalink,
-        //   metaId: `${meta.threadId}:${
-        //     meta.messageId
-        //   }:${schedule.start.getTime()}`,
-        // });
+      if (schedule) {
+        if (isCancellation) {
+          // キャンセル連絡の処理
+          notifyLineCancellation(meta, schedule, name);
+          deleteCalendarEvent(schedule, name);
+        } else if (isReservation) {
+          // 予約連絡の処理
+          notifyLineNow(meta, schedule, name);
+          const eventId = createCalendarEvent(schedule, meta, name, body);
+          // クーポン情報を含むタイトルを作成
+          const couponInfo = parseCouponInfo(body);
+          const titleForReminder = couponInfo
+            ? `${name}さま - ${couponInfo}`
+            : `${name}さま予約`;
+
+          // 前日LINEリマインド機能は無効化されています
+          // scheduleReminder(schedule, {
+          //   eventId,
+          //   calendarId: getCalendarId(),
+          //   title: titleForReminder,
+          //   start: schedule.start.toISOString(),
+          //   threadPermalink: meta.permalink,
+          //   metaId: `${meta.threadId}:${
+          //     meta.messageId
+          //   }:${schedule.start.getTime()}`,
+          // });
+        } else {
+          // 予約連絡ラベルもキャンセル連絡ラベルもない場合はデフォルトで予約として処理
+          notifyLineNow(meta, schedule, name);
+          createCalendarEvent(schedule, meta, name, body);
+        }
       } else {
         // 抽出失敗でも最低限の通知（運用に応じてオフ可）
         notifyLineFallback(meta);
@@ -393,6 +411,52 @@ function createCalendarEvent(schedule, meta, customerName, emailBody) {
 }
 
 /**
+ * Googleカレンダーから該当イベントを検索して削除
+ * @param {Object} schedule - 日程情報
+ * @param {string} customerName - 顧客名
+ */
+function deleteCalendarEvent(schedule, customerName) {
+  const calendar = getCalendar();
+  const safeName = (customerName || "ご予約").replace(/[\s　]+/g, " ").trim();
+
+  // 検索範囲: 開始時刻の前後30分
+  const searchStartTime = new Date(schedule.start.getTime() - 30 * 60 * 1000);
+  const searchEndTime = new Date(schedule.start.getTime() + 30 * 60 * 1000);
+
+  // カレンダーからイベントを検索
+  const events = calendar.getEvents(searchStartTime, searchEndTime);
+
+  let deletedCount = 0;
+  for (const event of events) {
+    const eventTitle = event.getTitle();
+    // タイトルに顧客名が含まれているかチェック
+    if (eventTitle.includes(safeName)) {
+      const eventStart = event.getStartTime();
+      // 開始時刻が一致しているかチェック（±5分の誤差を許容）
+      const timeDiff = Math.abs(
+        eventStart.getTime() - schedule.start.getTime()
+      );
+      if (timeDiff <= 5 * 60 * 1000) {
+        console.log(
+          `カレンダーイベント削除: ${eventTitle} (${formatJst(eventStart)})`
+        );
+        event.deleteEvent();
+        deletedCount++;
+        break; // 最初に見つかった1件のみ削除
+      }
+    }
+  }
+
+  if (deletedCount === 0) {
+    console.log(
+      `該当イベントが見つかりませんでした: ${safeName}さま ${formatJst(
+        schedule.start
+      )}`
+    );
+  }
+}
+
+/**
  * メール本文から予約詳細情報を抽出してフォーマットされた文字列を返す
  * @param {string} text - メール本文
  * @returns {string} - フォーマットされた予約詳細情報
@@ -552,6 +616,25 @@ function notifyLineNow(meta, schedule, customerName) {
       schedule.end ? ` - ${formatJst(schedule.end)}` : ""
     }`,
     reservationDetails,
+  ].join("\n");
+  pushLineMessageToAll({ type: "text", text });
+}
+
+/**
+ * キャンセル連絡のLINE通知を送信（簡略版）
+ * @param {Object} meta - メールメタデータ
+ * @param {Object} schedule - 日程情報
+ * @param {string} customerName - 顧客名
+ */
+function notifyLineCancellation(meta, schedule, customerName) {
+  const safeName = (customerName || "ご予約").replace(/[\s　]+/g, " ").trim();
+
+  const text = [
+    "【キャンセル連絡】SALON BOARD",
+    `お名前: ${safeName}さま`,
+    `日程: ${formatJst(schedule.start)}${
+      schedule.end ? ` - ${formatJst(schedule.end)}` : ""
+    }`,
   ].join("\n");
   pushLineMessageToAll({ type: "text", text });
 }
